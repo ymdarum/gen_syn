@@ -26,6 +26,8 @@ def read_rules(xlsx_path: str):
         for col in occu_df.columns:
             occu += [str(v).strip() for v in occu_df[col].dropna().tolist() if str(v).strip()]
         occu = [o for o in occu if o.lower() != 'nan']
+        # Preserve the first occurrence order while removing duplicates to keep RNG sampling stable.
+        occu = list(dict.fromkeys(occu))
     # Extract states
     states = []
     if "state" in sheets:
@@ -33,6 +35,8 @@ def read_rules(xlsx_path: str):
         for col in state_df.columns:
             states += [str(v).strip() for v in state_df[col].dropna().tolist() if str(v).strip()]
         states = [s for s in states if s.lower() != 'nan']
+        # Same ordered de-duplication for states so repeated spreadsheet values do not skew probabilities.
+        states = list(dict.fromkeys(states))
     # Date range for txns
     txn_start = datetime(2024,1,1, tzinfo=timezone.utc)
     txn_end   = datetime(2025,9,24, tzinfo=timezone.utc)  # today's date (UTC)
@@ -69,10 +73,12 @@ def make_txn_id(rng: np.random.Generator):
     return "TXN_" + rand_alnum(suffix_len, rng)
 
 def random_timestamp_utc(start_dt, end_dt, rng: np.random.Generator):
+    # Use integer seconds so we can deterministically sample uniform timestamps between the provided bounds.
     delta = int((end_dt - start_dt).total_seconds())
     if delta <= 0:
         return start_dt.isoformat().replace("+00:00","Z")
-    sec = int(rng.integers(0, delta))
+    # Draw from an inclusive range so the end datetime remains reachable when delta is non-zero.
+    sec = int(rng.integers(0, delta + 1))
     ts = start_dt + timedelta(seconds=sec)
     return ts.isoformat().replace("+00:00","Z")
 
@@ -80,6 +86,7 @@ def generate_profiles(n_customers, rules, rng: np.random.Generator):
     occu = rules["occu"]
     states = rules["states"]
     profiles = []
+    # Track seen identifiers so every generated profile row remains unique even under repeated RNG draws.
     used_cust = set()
     used_acc = set()
     for _ in range(n_customers):
@@ -93,6 +100,7 @@ def generate_profiles(n_customers, rules, rng: np.random.Generator):
             acc = make_account_id(rng)
         used_acc.add(acc)
         
+        # Ages and other numerics pull directly from the rng so seeding reproduces the same distribution.
         age = int(rng.integers(10, 100))  # 10-99 inclusive
         occupation = str(rng.choice(occu)).upper()
         state = str(rng.choice(states))
@@ -134,6 +142,7 @@ def generate_txns(profile_df, avg_txn, rules, rng: np.random.Generator):
     start_dt = rules["txn_start"]
     end_dt = rules["txn_end"]
     txns = []
+    # Guard the Poisson lambda so we always generate at least one transaction per customer.
     lam = max(1, avg_txn)
     for _, row in profile_df.iterrows():
         n_txn = max(1, int(rng.poisson(lam)))
@@ -146,6 +155,7 @@ def generate_txns(profile_df, avg_txn, rules, rng: np.random.Generator):
             channel = str(rng.choice(channels))
 
             # Randomly pick Malaysian-like personal or company names
+            # Bias towards personal names to mimic the majority of retail payments.
             if rng.random() < 0.8:
                 cp_name = f"{rng.choice(FIRST_NAMES)} {rng.choice(LAST_NAMES)}"
             else:
@@ -175,6 +185,7 @@ def main():
     parser.add_argument("--outdir", default="output", help="Output directory")
     args = parser.parse_args()
     
+    # Centralise randomness through numpy's Generator so every downstream helper respects the --seed flag.
     rng = np.random.default_rng(args.seed)
     rules = read_rules(args.rules)
     os.makedirs(args.outdir, exist_ok=True)
