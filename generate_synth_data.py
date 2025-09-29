@@ -17,7 +17,6 @@ import pandas as pd
 import numpy as np
 
 def read_rules(xlsx_path: str):
-    # Load the workbook once so pandas does not re-parse the Excel file for every sheet access.
     with pd.ExcelFile(xlsx_path) as xls:
         sheets = {name: xls.parse(sheet_name=name) for name in xls.sheet_names}
     # Extract occupation list
@@ -51,30 +50,25 @@ def read_rules(xlsx_path: str):
         "channels": channels
     }
 
-# Precompute the alphanumeric alphabet once so each ID generation reuses the same deterministic pool.
 _ALPHABET = np.array(list(string.ascii_uppercase + string.ascii_lowercase + string.digits))
 
 
 def rand_alnum(n, rng: np.random.Generator):
-    # Vectorised integer draws avoid Python loops while letting us honour the seeded RNG.
     idx = rng.integers(0, len(_ALPHABET), size=n)
     return ''.join(_ALPHABET[idx])
 
 
 def make_customer_id(rng: np.random.Generator):
-    # IDs are kept at a consistent length so downstream systems can rely on the prefix + suffix contract.
     suffix_len = max(1, 10 - len("CUST_"))
     return "CUST_" + rand_alnum(suffix_len, rng)
 
 
 def make_account_id(rng: np.random.Generator):
-    # Account identifiers reuse the shared alphabet to keep reproducible spacing between reruns.
     suffix_len = max(1, 12 - len("CACC_"))
     return "CACC_" + rand_alnum(suffix_len, rng)
 
 
 def make_txn_id(rng: np.random.Generator):
-    # Transaction IDs also route through the seeded generator so the --seed flag controls every identifier.
     suffix_len = max(1, 15 - len("TXN_"))
     return "TXN_" + rand_alnum(suffix_len, rng)
 
