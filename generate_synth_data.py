@@ -11,15 +11,14 @@ Usage:
   python generate_synth_data.py --rules rule_to_observe.xlsx --profiles 1000 --avg_txn 15 --seed 42 --outdir output
 
 """
-import argparse, os, random, string
+import argparse, os, string
 from datetime import datetime, timedelta, timezone
 import pandas as pd
 import numpy as np
-from faker import Faker
 
 def read_rules(xlsx_path: str):
-    xls = pd.ExcelFile(xlsx_path)
-    sheets = {name: pd.read_excel(xlsx_path, sheet_name=name) for name in xls.sheet_names}
+    with pd.ExcelFile(xlsx_path) as xls:
+        sheets = {name: xls.parse(sheet_name=name) for name in xls.sheet_names}
     # Extract occupation list
     occu = []
     if "occu" in sheets:
@@ -47,21 +46,27 @@ def read_rules(xlsx_path: str):
         "channels": channels
     }
 
-def rand_alnum(n):
-    alphabet = string.ascii_uppercase + string.ascii_lowercase + string.digits
-    return ''.join(random.choices(alphabet, k=n))
+_ALPHABET = np.array(list(string.ascii_uppercase + string.ascii_lowercase + string.digits))
 
-def make_customer_id():
+
+def rand_alnum(n, rng: np.random.Generator):
+    idx = rng.integers(0, len(_ALPHABET), size=n)
+    return ''.join(_ALPHABET[idx])
+
+
+def make_customer_id(rng: np.random.Generator):
     suffix_len = max(1, 10 - len("CUST_"))
-    return "CUST_" + rand_alnum(suffix_len)
+    return "CUST_" + rand_alnum(suffix_len, rng)
 
-def make_account_id():
+
+def make_account_id(rng: np.random.Generator):
     suffix_len = max(1, 12 - len("CACC_"))
-    return "CACC_" + rand_alnum(suffix_len)
+    return "CACC_" + rand_alnum(suffix_len, rng)
 
-def make_txn_id():
+
+def make_txn_id(rng: np.random.Generator):
     suffix_len = max(1, 15 - len("TXN_"))
-    return "TXN_" + rand_alnum(suffix_len)
+    return "TXN_" + rand_alnum(suffix_len, rng)
 
 def random_timestamp_utc(start_dt, end_dt, rng: np.random.Generator):
     delta = int((end_dt - start_dt).total_seconds())
@@ -78,14 +83,14 @@ def generate_profiles(n_customers, rules, rng: np.random.Generator):
     used_cust = set()
     used_acc = set()
     for _ in range(n_customers):
-        cid = make_customer_id()
+        cid = make_customer_id(rng)
         while cid in used_cust:
-            cid = make_customer_id()
+            cid = make_customer_id(rng)
         used_cust.add(cid)
-        
-        acc = make_account_id()
+
+        acc = make_account_id(rng)
         while acc in used_acc:
-            acc = make_account_id()
+            acc = make_account_id(rng)
         used_acc.add(acc)
         
         age = int(rng.integers(10, 100))  # 10-99 inclusive
@@ -107,9 +112,24 @@ def generate_profiles(n_customers, rules, rng: np.random.Generator):
         })
     return pd.DataFrame(profiles)
 
+FIRST_NAMES = [
+    "Adam", "Aisha", "Daniel", "Hana", "Irfan", "Nurul", "Zara",
+    "Farid", "Azlan", "Siti", "John", "Jane", "Ali", "Fatimah",
+    "Kumar", "Rajesh", "Mei Ling", "Wei", "Chong", "Liyana",
+    "Amir", "Syafiq", "Farah", "Suresh", "Vijaya", "Anand",
+]
+
+LAST_NAMES = [
+    "Rahman", "Abdullah", "Tan", "Lim", "Lee", "Ng", "Wong",
+    "Ismail", "Hussin", "Hashim", "Doe", "Kaur", "Singh", "Chan",
+    "Ong", "Gopal", "Subramaniam", "Mohamed", "Salleh", "Ahmad"
+]
+
+COMPANY_PREFIXES = ["Kedai", "Restoran", "Warung", "Syarikat", "Perusahaan", "Bengkel", "Online"]
+COMPANY_SUFFIXES = ["Maju", "Jaya", "Sentosa", "Makmur", "Bestari", "Hebat", "Sejahtera", "Baroena"]
+
+
 def generate_txns(profile_df, avg_txn, rules, rng: np.random.Generator):
-    faker = Faker()
-    F = faker
     channels = rules["channels"]
     start_dt = rules["txn_start"]
     end_dt = rules["txn_end"]
@@ -119,34 +139,21 @@ def generate_txns(profile_df, avg_txn, rules, rng: np.random.Generator):
         n_txn = max(1, int(rng.poisson(lam)))
         acc = row["Customer_Acc"]
         for _ in range(n_txn):
-            txn_id = make_txn_id()
+            txn_id = make_txn_id(rng)
             ts = random_timestamp_utc(start_dt, end_dt, rng)
             amount = float(np.round(rng.uniform(100, 1_000_000), 2))
             ttype = str(rng.choice(["credit", "debit"]))
             channel = str(rng.choice(channels))
-            # cp_name = random.choice([F.name(), F.company(), F.name_nonbinary(), F.first_name() + " " + F.last_name()])
-            # Local Malaysian names
-            FIRST_NAMES = [
-                "Adam", "Aisha", "Daniel", "Hana", "Irfan", "Nurul", "Zara",
-                "Farid", "Azlan", "Siti", "John", "Jane", "Ali", "Fatimah",
-                "Kumar", "Rajesh", "Mei Ling", "Wei", "Chong", "Liyana",
-                "Amir", "Syafiq", "Farah", "Suresh", "Vijaya", "Anand",
-            ]
-            LAST_NAMES = [
-                "Rahman", "Abdullah", "Tan", "Lim", "Lee", "Ng", "Wong",
-                "Ismail", "Hussin", "Hashim", "Doe", "Kaur", "Singh", "Chan",
-                "Ong", "Gopal", "Subramaniam", "Mohamed", "Salleh", "Ahmad"
-            ]
 
             # Randomly pick Malaysian-like personal or company names
             if rng.random() < 0.8:
                 cp_name = f"{rng.choice(FIRST_NAMES)} {rng.choice(LAST_NAMES)}"
             else:
-                company_prefix = rng.choice(["Kedai", "Restoran", "Warung", "Syarikat", "Perusahaan", "Bengkel", "Online"])
-                company_suffix = rng.choice(["Maju", "Jaya", "Sentosa", "Makmur", "Bestari", "Hebat", "Sejahtera","Baroena"])
+                company_prefix = rng.choice(COMPANY_PREFIXES)
+                company_suffix = rng.choice(COMPANY_SUFFIXES)
                 cp_name = f"{company_prefix} {company_suffix}"
 
-            cp_acc = make_account_id()
+            cp_acc = make_account_id(rng)
             txns.append({
                 "Customer_Acc": acc,
                 "Transaction_ID": txn_id,
